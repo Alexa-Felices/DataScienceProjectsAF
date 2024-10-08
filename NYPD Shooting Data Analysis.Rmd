@@ -1,0 +1,198 @@
+---
+title: "NYPD Shooting Incident Data"
+author: "A. Felices"
+date: "2024-09-28"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Summary of Data
+
+For this assignment, I will be using the data set located here: https://catalog.data.gov/dataset/nypd-shooting-incident-data-historic
+
+I will be reading in the csv file at that location and cleaning it up as shown. The following is a summary of the data as-is:
+
+```{r}
+library(tidyverse)
+nypd_csv_url = "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+nypd = read_csv(nypd_csv_url)
+
+summary(nypd)
+```
+
+## Tidying up Data and Handling Missing Values
+
+A first look at the NYPD shooting incident data shows that many of the values for location_desc, loc_classfctn_desc, and loc_of_occur_desc are missing and listed as "NA" or null. I decided to remove these columns as they are not what I would like to focus on. I also removed OCCUR_TIME, Latitude, Longitude, X_COORD_CD, and Y_COORD_CD as I felt these were not relevant to the analysis I wanted to perform. 
+
+I then checked that there were no missing values for boroughs, precincts, and dates.
+
+```{r nypd filter}
+nypd <- nypd %>% select(-c(OCCUR_TIME,LOC_OF_OCCUR_DESC, LOC_CLASSFCTN_DESC, LOCATION_DESC, X_COORD_CD, Y_COORD_CD, Latitude, Longitude)) 
+
+nypd %>% filter(is.na(OCCUR_DATE))
+nypd %>% filter(is.na(BORO))
+nypd %>% filter(is.na(PRECINCT))
+
+summary(nypd)
+
+```
+
+I determined at this point I likely wouldn't need JURISDICTION_CODE, STATISTICAL_MURDER_FLAG, and Lon_Lat, so I decided to remove those. Upon looking at the PERP_AGE_GROUP, PERP_SEX, PERP_RACE, VIC_AGE_GROUP, VIC_SEX, and VIC_RACE columns, I realized that many of these data rows had "NA" or null values. I decided to remove these as I did not need them for the analysis I wished to peform. The other rows did not appear to have any NA or null values.
+
+In examining my own biases, I had always heard that Bronx was more unsafe than Brooklyn, but I, personally, feel more unsafe in more densely populated areas, and I was fairly sure that Brooklyn was larger than Bronx. I decided to therefore focus on understanding the shooting incidents recorded for each borough and precinct. I also cleaned up the data by pivoting columns to be more indicative of counts and changing the format of the date column to mdy.
+
+```{r nypd_by_boro_precinct creation}
+nypd <- nypd %>% select(-c(JURISDICTION_CODE, STATISTICAL_MURDER_FLAG, Lon_Lat, PERP_AGE_GROUP, PERP_SEX, PERP_RACE, VIC_AGE_GROUP, VIC_SEX, VIC_RACE)) %>% rename(date = 'OCCUR_DATE') %>% mutate(date = mdy(date))
+
+nypd_by_boro_precinct <- nypd %>% group_by(date, BORO, PRECINCT) %>% add_count(INCIDENT_KEY, name = 'Incident_Count')
+
+summary(nypd_by_boro_precinct)
+
+```
+
+## Creating Data Visualizations (Borough and Precinct)
+
+Looking at the data I had, I wanted to know what timeframe I was analyzing so I could get an accurate picture for the dataset. I ran the following:
+
+```{r nypd_by_boro_precinct, nypd_by_demo min/max}
+
+max(nypd_by_boro_precinct$date)
+min(nypd_by_boro_precinct$date)
+
+```
+
+From this, I concluded that the dataset could be accurately referred to as NYPD shooting incidents by borough between the beginning of January of 2006 and the end of December of 2023.
+
+At this point, I was pretty happy with my dataset, but I thought it might be better to break out the different boroughs and simply compare the precincts' overall counts. I compiled these into different variables:
+
+```{r nypd_by_boro_precinct splitting}
+
+nypd_by_manhattan <- nypd_by_boro_precinct %>% filter(BORO == 'MANHATTAN') %>% group_by(PRECINCT) %>% summarize(Incident_Count = sum(Incident_Count))
+nypd_by_staten <- nypd_by_boro_precinct %>% filter(BORO == 'STATEN ISLAND') %>% group_by(PRECINCT) %>% summarize(Incident_Count = sum(Incident_Count))
+nypd_by_bronx <- nypd_by_boro_precinct %>% filter(BORO == 'BRONX') %>% group_by(PRECINCT) %>% summarize(Incident_Count = sum(Incident_Count))
+nypd_by_queens <- nypd_by_boro_precinct %>% filter(BORO == 'QUEENS') %>% group_by(PRECINCT) %>% summarize(Incident_Count = sum(Incident_Count))
+nypd_by_brooklyn <- nypd_by_boro_precinct %>% filter(BORO == 'BROOKLYN') %>% group_by(PRECINCT) %>% summarize(Incident_Count = sum(Incident_Count))
+
+```
+
+And then plotted each borough's precincts and incident counts associated with those precincts:
+
+```{r nypd_by_manhattan, nypd_by_staten, nypd_by_bronx, nypd_by_queens, nypd_by_brooklyn}
+
+nypd_by_manhattan$PRECINCT <- factor(nypd_by_manhattan$PRECINCT, levels = nypd_by_manhattan$PRECINCT)
+ggplot(nypd_by_manhattan,aes(x = PRECINCT, y = Incident_Count))+geom_bar(stat="identity")+labs(title = "Manhattan Shooting Incidents by Precinct from Jan 2006 to Dec 2023")
+
+nypd_by_staten$PRECINCT <- factor(nypd_by_staten$PRECINCT, levels = nypd_by_staten$PRECINCT)
+ggplot(nypd_by_staten,aes(x = PRECINCT, y = Incident_Count))+geom_bar(stat="identity")+labs(title = "Staten Island Shooting Incidents by Precinct from Jan 2006 to Dec 2023")
+
+nypd_by_bronx$PRECINCT <- factor(nypd_by_bronx$PRECINCT, levels = nypd_by_bronx$PRECINCT)
+ggplot(nypd_by_bronx,aes(x = PRECINCT, y = Incident_Count))+geom_bar(stat="identity")+labs(title = "Bronx Shooting Incidents by Precinct from Jan 2006 to Dec 2023")
+
+nypd_by_queens$PRECINCT <- factor(nypd_by_queens$PRECINCT, levels = nypd_by_queens$PRECINCT)
+ggplot(nypd_by_queens,aes(x = PRECINCT, y = Incident_Count))+geom_bar(stat="identity")+labs(title = "Queens Shooting Incidents by Precinct from Jan 2006 to Dec 2023")
+
+nypd_by_brooklyn$PRECINCT <- factor(nypd_by_brooklyn$PRECINCT, levels = nypd_by_brooklyn$PRECINCT)
+ggplot(nypd_by_brooklyn,aes(x = PRECINCT, y = Incident_Count))+geom_bar(stat="identity")+labs(title = "Brooklyn Shooting Incidents by Precinct from Jan 2006 to Dec 2023")
+
+```
+## Borough/Precinct Data Analysis
+
+I thought this was an interesting presentation of data, as this shows that the number of shootings in precinct 75 in Brooklyn by far outnumber those in any other boroughs' precincts (just over 3000, compared to next highest in Bronx's 46th at just over 2000), but you can see that, overall, most of Brooklyn's precincts have actually had fewer than 1000 incidents in the 17 years of historical data. I wondered if this meant that there could be some skewing of data due to population of each precinct, or even each city.
+
+A simple average of the best and worst precincts of each city seems to suggest that Brooklyn is less safe than Bronx:
+
+```{r nypd_by_brooklyn, nypd_by_bronx}
+
+brooklyn_avg <- (max(nypd_by_brooklyn$Incident_Count) + min(nypd_by_brooklyn$Incident_Count)) / 2
+
+bronx_avg <- (max(nypd_by_bronx$Incident_Count) + min(nypd_by_bronx$Incident_Count)) / 2
+
+```
+
+Borough | Average Incidents Across Precincts |
+--------|:----------------------------------:|
+Brooklyn| `r brooklyn_avg`                   |
+Bronx   | `r bronx_avg`                      |
+
+
+From this data alone, it seems you could conclude that Brooklyn is most likely to have a shooting incident, which is inline with my previously stated bias. However, it does raise the question, how does this data correlate with the population of each city? If Brooklyn is more populated than Bronx, that could indicate that there was simply a rise in shootings associated with an increased population. Further, if we normalized these results by population, we could then make a much more definitive conclusion.
+
+## Model of Borough/Precinct Data Using NYC Population
+
+Because I would need population data to accurately look at what could be driving the amount of shooting cases, I decided to use the NYC census data located here: https://catalog.data.gov/dataset/new-york-city-population-by-community-districts
+
+```{r nyc_pop}
+nyc_pop <- read.csv("https://data.cityofnewyork.us/api/views/xi7c-iiu2/rows.csv?accessType=DOWNLOAD")
+
+summary(nyc_pop)
+```
+
+Unfortunately, the data only goes to 2010, but I could estimate the approximate population at each date in the shooting incident data by modeling the population data. First, I needed to clean the data. I also decided I would focus solely on Bronx and Brooklyn to explore the earlier questions I had about whether population had anything to do with the trends seen in their precincts. I transposed and cleaned the data so that I could model it by year.
+
+```{r nyc_pop cleaning}
+
+nyc_pop <- nyc_pop %>% select(-c(CD.Number, CD.Name)) %>% group_by(Borough) %>% summarize(X1970.Population = sum(X1970.Population), X1980.Population = sum(X1980.Population), X1990.Population = sum(X1990.Population), X2000.Population = sum(X2000.Population), X2010.Population = sum(X2010.Population)) %>% rename('1970' = 'X1970.Population', '1980' = 'X1980.Population', '1990' = 'X1990.Population', '2000' = 'X2000.Population', '2010' = 'X2010.Population')  
+
+nyc_pop <- nyc_pop %>% pivot_longer(cols = -(Borough), names_to = "Year") %>% pivot_wider(names_from = c(Borough)) %>% mutate(Year = as.integer(Year))
+
+nyc_pop
+
+```
+
+It should be noted here that Brooklyn's population was clearly nearly double that of Bronx, so I determined that even a slight correlation between year and population would prove useful in approximating population. Now that I have my "Year" column as an integer and my population data organized by borough, it's simple enough to create a scatter plot and linear model.
+
+```{r mods}
+
+mod_Bronx <- lm(Bronx ~ Year, data = nyc_pop)
+mod_Brooklyn <- lm(Brooklyn ~ Year, data = nyc_pop)
+
+summary(mod_Bronx)
+summary(mod_Brooklyn)
+
+```
+
+The R-squared value is not very high, so a linear function may not accurately predict the population of either borough. But, as I said, we can still use it as a rough estimate and normalize our shooting incident data for each borough since the difference between the two boroughs' populations is so large to begin with. First, I needed to create new tables, adding the predicted population for Brooklyn and Bronx, and normalize their shooting incidents by population. I also removed the outlier value from 2005 of 2, which appeared to be an error.
+
+```{r nypd_by_boro_precinct, mod_Bronx, mod_Brooklyn}
+
+nyc_Brooklyn <- nypd_by_boro_precinct %>% mutate(Year = as.integer(isoyear(date))) %>% group_by(Year, BORO) %>% summarize(Incident_Count = sum(Incident_Count)) %>% filter(BORO == "BROOKLYN", Incident_Count > 2)
+
+years_Brooklyn <- data.frame(nyc_Brooklyn$Year) %>% rename(Year = nyc_Brooklyn.Year)
+years_Brooklyn <- years_Brooklyn %>% mutate(predpop = predict(mod_Brooklyn, newdata = years_Brooklyn))
+nyc_Brooklyn <- merge(x = nyc_Brooklyn, y = years_Brooklyn, by = "Year", all.x = TRUE) %>% mutate(Brooklyn_count_per_mill = Incident_Count *1000000 / predpop)
+
+nyc_Bronx <- nypd_by_boro_precinct %>% mutate(Year = as.integer(isoyear(date))) %>% group_by(Year, BORO) %>% summarize(Incident_Count = sum(Incident_Count)) %>% filter(BORO == "BRONX", Incident_Count > 2)
+
+years_Bronx <- data.frame(nyc_Bronx$Year) %>% rename(Year = nyc_Bronx.Year)
+years_Bronx <- years_Bronx %>% mutate(predpop = predict(mod_Bronx, newdata = years_Bronx))
+nyc_Bronx <- merge(nyc_Bronx, years_Bronx, by = "Year", all.x = TRUE) %>% mutate(Bronx_count_per_mill = Incident_Count *1000000 / predpop)
+
+summary(nyc_Brooklyn)
+summary(nyc_Bronx)
+
+```
+
+From here, the summary of the data tables gave me a pretty good idea of what the Brooklyn vs. Bronx data would look like, but to illustrate this, I combined the tables and charted the data:
+
+```{r nyc_Brooklyn, nyc_Bronx}
+
+nyc_BronxvBrooklyn <- merge(nyc_Bronx, nyc_Brooklyn, by = "Year") %>% select(-c(BORO.x, Incident_Count.x, predpop.x, BORO.y, Incident_Count.y, predpop.y))
+
+nyc_BronxvBrooklyn %>% ggplot(aes(x = Year, y = Bronx_count_per_mill)) + geom_line(aes(color = "Bronx_count_per_mill")) + geom_point(aes(color = "Bronx_count_per_mill")) + geom_line(aes(y = Brooklyn_count_per_mill, color = "Brooklyn_count_per_mill")) + geom_point(aes(y = Brooklyn_count_per_mill, color = "Brooklyn_count_per_mill")) + scale_y_log10() + theme(legend.position ="bottom", axis.text.x = element_text(angle = 90)) + labs(title = "NYPD Recorded Shooting Incidents in Bronx and Brooklyn Normalized by Population", y = NULL)
+
+
+```
+
+As we can see from the above plot, generally Bronx has almost 25% more shootings per million people year over year, despite the population of Brooklyn being nearly double that of Bronx. This would seem to suggest that our earlier finding that 75th precinct had more shootings than any other precinct in the Bronx may have indeed been population driven, rather than an indication of how safe Brooklyn is compared to Bronx. In fact, the above would lead me to conclude the opposite, that Bronx is on average less safe than Brooklyn due to having more shooting incidents per capita.
+
+## Conclusion and Sources of Bias
+
+In summary, the NYPD shooting incident data collected from 2006 to 2023 at first seemed to indicate that precinct 75 of Brooklyn was much less safe than any other precinct, and on average, Brooklyn seemed to have far more shootings than any other borough of New York. One source of bias I identified in myself was that I generally do feel more unsafe in larger cities or places that are more populated. In order to combat this bias, I asked myself: is it true that more densely populated areas are unsafe due to the higher number of shootings or other forms of crime they have compared to others? Or is it possible that, on average, they're actually safer when controlling for population density?
+
+To explore this, I modeled the NYC population data for Brooklyn and Bronx and applied that model to the shooting incident data, normalizing the shooting incidents in each year for each borough by the estimated population of the borough at the time. While the model was not the best fit for the population data, the population of Brooklyn was almost twice that of Bronx in each census, so it acted well enough as an estimate for my purposes. I used the model to normalize the shooting incidents recorded in each year for Bronx and Brooklyn, and then plotted the results. When graphed, it became clear that the number of shooting incidents per million persons living in Bronx was actually higher than that of Brooklyn - this indicated that my earlier assumption was incorrect, a larger borough in this case actually had fewer shooting incidents per capita than a smaller one. So we can conclude that the earlier assumption that Brooklyn was unsafe was not true, and not a full picture without the population data.
+
