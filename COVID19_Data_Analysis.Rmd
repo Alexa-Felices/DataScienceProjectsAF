@@ -1,0 +1,395 @@
+---
+title: "COVID19 Data Analysis"
+author: "A. Felices"
+date: "2024-10-08"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Analysis of COVID-19 Data from Johns Hopkins
+
+The following report contains an analysis of COVID-19 data collected by Johns 
+Hopkins, including recorded cases and deaths both in the US and globally. The 
+goals of this analysis were to a) compare the trends in cases and deaths of the 
+US to countries with stricter quarantine requirements (e.g., China), b) look at 
+the trend of cases and deaths in the US before and after the introduction of the 
+COVID vaccine, and c) model current US cases and deaths and predict 2024 data.
+
+This report will be using the tidyverse library packages and importing data from 
+the Johns Hopkins github repository, as shown:
+
+```{r import data}
+library(tidyverse)
+
+url_in <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/"
+file_names <- c("time_series_covid19_confirmed_global.csv",
+                "time_series_covid19_deaths_global.csv",
+                "time_series_covid19_confirmed_US.csv",
+                "time_series_covid19_deaths_US.csv")
+urls <- str_c(url_in, file_names)
+
+global_cases <- read_csv(urls[1])
+global_deaths <- read_csv(urls[2])
+us_cases <- read_csv(urls[3])
+us_deaths <- read_csv(urls[4])
+
+```
+
+## Cleaning and Transforming the Loaded Data
+
+A summary of each global dataset shows that the data is collected in columns, 
+where each date is represented by a column. This is not very R-friendly, and the 
+data would be easier to visualize if the dates were represented as rows, with # 
+of cases or deaths in the value for each column. Additionally, Lat and Long data 
+will not be needed for this analysis, so they were removed, and the two pivot 
+tables were joined.
+
+Once the two tables were joined to form the "global" dataset, the date column 
+was also changed to mdy format, for easier analysis.
+
+```{r global pivots}
+
+#Pivot of global cases dataset
+global_cases <- global_cases %>% 
+  pivot_longer(cols = -c('Province/State', 'Country/Region', Lat, Long),
+               names_to = "date",
+               values_to = "cases") %>%
+  select(-c(Lat, Long))
+               
+#Pivot of global deaths dataset
+global_deaths <- global_deaths %>% 
+  pivot_longer(cols = -c('Province/State', 'Country/Region', Lat, Long),
+               names_to = "date",
+               values_to = "deaths") %>%
+  select(-c(Lat, Long))
+
+#Join two global tables and reformat date column
+global <- global_cases %>%
+  full_join(global_deaths) %>%
+  rename(Country_Region = 'Country/Region',
+         Province_State = 'Province/State') %>%
+  mutate(date = mdy(date))
+
+summary(global)
+
+```
+
+The data for global now shows that there are many rows or dates with no cases recorded. Considering that the goal of the analysis is to look at the trend of reported cases over time, it makes sense to remove these.
+
+```{r global filter}
+
+#Filtering out "0 case" days
+global <- global %>% filter(cases > 0)
+summary(global)
+
+```
+
+The current maximum is very large, but that does look right for the nearly four 
+years of collection. Next, looking at the US cases and deaths tables showed that
+the data was collected in a similar format, so these were also pivoted 
+accordingly. The only difference between the two being that the "deaths" 
+dataset also included population data. Several columns were determined to be 
+unnecessary, as well, such as UID, iso2, iso3, code3, etc. so these were 
+removed. Finally, the newly created date column was reformatted so that each 
+date was in mdy format for easier visualization.
+
+Once these pivots were completed, they were joined to form the "us" dataset.
+
+```{r us pivots}
+
+#Pivot of us cases dataset
+us_cases <- us_cases %>% 
+  pivot_longer(cols = -(UID:Combined_Key),
+               names_to = "date",
+               values_to = "cases") %>%
+  select(Admin2:cases) %>%
+  mutate(date = mdy(date)) %>%
+  select(-c(Lat, Long_))
+
+#Pivot of us deaths dataset
+us_deaths <- us_deaths %>% 
+  pivot_longer(cols = -(UID:Population),
+               names_to = "date",
+               values_to = "deaths") %>%
+  select(Admin2:deaths) %>%
+  mutate(date = mdy(date)) %>%
+  select(-c(Lat, Long_))
+
+#Join US tables
+us <- us_cases %>%
+  full_join(us_deaths)
+
+```
+
+As a first step towards the earlier stated analytical goals, population data was
+added into the global dataset so that any comparison between, say, China and the
+US would be normalized by each country's population. This population data was
+also taken from Johns Hopkins' repository.
+
+```{r global pop data}
+
+#Create combined key for adding population data for each region
+global <- global %>%
+  unite("Combined_Key",
+        c(Province_State, Country_Region),
+        sep = ", ",
+        na.rm = TRUE,
+        remove = FALSE)
+
+#Population data url
+uid_lookup_url <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/UID_ISO_FIPS_LookUp_Table.csv"
+uid <- read_csv(uid_lookup_url) %>%
+  select(-c(Lat, Long_, Combined_Key, code3, iso2, iso3, Admin2))
+
+#Joining based on province/state and country/region
+global <- global %>%
+  left_join(uid, by = c("Province_State", "Country_Region")) %>%
+  select(-c(UID, FIPS)) %>%
+  select(Province_State, Country_Region, date,
+         cases, deaths, Population,
+         Combined_Key)
+
+summary(global)
+
+```
+
+A summary of the global dataset shows that it now contains the population data for each country and region, so we are ready to begin our analysis.
+
+## Cases in China vs. Cases in US from Jan 2020 to Mar 2023
+
+The first piece of interest was a comparison between cases recorded in China and
+cases recorded in the US over the period of collection. The reason I wished to 
+compare, was because I was acutely aware of travel restrictions and long 
+quarantine requirements since I was scheduled to travel to China for business 
+in 2021. There was a quarantine of at least 2 weeks for any business travel, and
+up to 3 depending on the customer site and COVID test results. I was curious if 
+this affected the cases recorded from 2021 to 2023 compared to the US, which did
+not require quarantines unless a traveler presented a positive COVID result. 
+
+First, a new table was created that contained population normalized data for 
+China and US cases.
+
+```{r compare China and US cases}
+
+#Filtering global data for US/China cases
+covid_china <- global %>% filter(Country_Region == "China")
+covid_china <- covid_china %>%
+  group_by(Province_State, Country_Region, date) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths),
+            Population = sum(Population)) %>%
+  select(Province_State, Country_Region, date, cases, deaths, Population) %>%
+  ungroup()
+covid_us <- global %>% filter(Country_Region == "US")
+
+#Add new column feat. cases/million in country
+covid_china <- covid_china %>% mutate(china_cases_mil = cases *1000000 / Population)
+covid_us <- covid_us %>% mutate(us_cases_mil = cases *1000000 / Population)
+
+#Combining new tables
+us_vs_china <- merge(covid_china, covid_us, by = "date") %>% select(-c(
+  Province_State.x, Country_Region.x, Population.x, cases.x, deaths.x, 
+  Province_State.y, Country_Region.y, Population.y, cases.y, 
+  deaths.y))
+
+```
+
+Now, I can plot China vs. US data and compare.
+
+```{r US vs. China Plot}
+
+us_vs_china %>% ggplot(aes(x = date, y = china_cases_mil)) + 
+  geom_line(aes(color = "China")) + geom_point(aes(color = "China")) + 
+  geom_line(aes(y = us_cases_mil, color = "US")) + geom_point(aes(
+    y = us_cases_mil, color = "US")) + scale_y_log10() + 
+  theme(legend.position ="bottom", axis.text.x = element_text(angle = 90)) + 
+  labs(title = "COVID-19 Cases Recorded in China vs. US from Jan 2020 to Mar 2023", 
+       y = NULL)
+
+```
+
+This chart helps illustrate some of the difference in response time and severity 
+of case density in either country; despite having a much larger population, 
+China's cases/million rose at a similar rate but then reached a smaller peak 
+until shortly after 2022, which is when most of the strictest quarantine 
+measures were dropped. The sharp increase also coincides with the rise of the 
+more contagious but less dangerous Omicron variant.
+
+I also think it's interesting to see that there's a lot of variance in China's 
+reported numbers, with more rural regions having lower reported cases/million 
+for each date. The US data in the global table only contains all counts for the 
+country overall, rather than each state (provinces in China's case).
+
+## US Deaths per Million After COVID Vaccine Introduced in 2021
+
+Using the US-specific data, I wanted to also look at cases and deaths per 
+million for various states, and especially following the introduction of the 
+COVID vaccine. I decided to pick Texas and California, as I was born in Texas 
+and my husband was born in California.
+
+I started by summarizing the previous "us" data table by each state and date, so
+that the sum of cases and deaths for each date would represent the state as a 
+whole. Then, I normalized the results by each state's population, and combined 
+the results.
+
+```{r compare cases and deaths for Texas and California}
+
+#Grouping US data by state
+US_by_state <- us %>%
+  group_by(Province_State, Country_Region, date) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths),
+            Population = sum(Population)) %>%
+  select(Province_State, Country_Region, date, cases, deaths, Population) %>%
+  ungroup()
+
+#Filtering US data for Texas/California cases
+covid_TX <- US_by_state %>% filter(Province_State == "Texas")
+covid_CA <- US_by_state %>% filter(Province_State == "California")
+
+#Add new columns feat. cases/million and deaths/million in state
+covid_TX <- covid_TX %>% mutate(TX_cases_mil = cases *1000000 / Population) %>%
+  mutate(TX_deaths_mil = deaths *1000000 / Population)
+covid_CA <- covid_CA %>% mutate(CA_cases_mil = cases *1000000 / Population) %>%
+  mutate(CA_deaths_mil = deaths *1000000 / Population)
+
+#Combining new tables
+TX_vs_CA <- merge(covid_TX, covid_CA, by = "date") %>% select(-c(
+  Province_State.x, Country_Region.x, cases.x, Population.x, deaths.x, 
+  Province_State.y, Country_Region.y, cases.y, Population.y, deaths.y,))
+
+summary(TX_vs_CA)
+
+```
+The summary looks reasonable, and this time I do want to include the 0 cases as 
+I would like to see when each state started to record cases and deaths.
+
+From here, I plotted the data, adding a vertical line on August 23, 2021, when 
+the COVID vaccine was released in the US.
+
+```{r TX vs. CA Plot}
+
+TX_vs_CA %>% ggplot(aes(x = date, y = TX_deaths_mil)) + 
+  geom_line(aes(color = "TX deaths/million")) + geom_point(aes(
+    color = "TX deaths/million")) + 
+  geom_line(aes(y = CA_deaths_mil, color = "CA deaths/million")) + 
+  geom_point(aes(y = CA_deaths_mil, color = "CA deaths/million")) + 
+  theme(legend.position ="bottom", axis.text.x = element_text(angle = 90)) + 
+  geom_vline(xintercept = ymd('2021-08-23'), linetype = "dotted", color = "blue",
+             size = 1.5) + geom_text(aes(x = ymd('2021-08-23'), 
+                                         label = "\nCOVID Vaccine",
+                                         y = 500), colour ="blue", angle = 90) +
+  labs(title = "COVID-19 Deaths Recorded in Texas vs. California from Jan 2020 to Mar 2023", 
+       y = NULL)
+
+```
+
+It's interesting to see that the trends for CA and TX deaths are actually very
+similar at first, diverging slowly from 2020 to 2021, and then sharply shortly
+after late 2021. I can only speculate that the Delta wave hitting in late 2021
+may have played a factor, but I am curious whether or not vaccine records in CA
+and TX might shed some light on this divergence.
+
+## Modeling TX Deaths / Cases from 2022 to 2023 and Predicting 2024
+
+Finally, I decided I would look at my home state's deaths per cases and try to
+model the deaths/cases for 2024.
+
+Using the covid_TX dataset I created earlier, I attempted to fit a linear model
+of percentage of deaths per cases vs. time.
+
+```{r TX Deaths/Cases model}
+
+#Add new column deaths/cases
+covid_TX <- covid_TX %>% filter(cases > 0) %>% 
+  mutate(deaths_per_cases = deaths / cases * 100)
+
+#Generate model as function of time
+mod_TX <- lm(deaths_per_cases ~ date, covid_TX)
+
+#Check model fit
+summary(mod_TX)
+
+```
+The R-squared value indicates that this is not a very well-fitted model, which 
+makes sense since there were likely spikes in deaths/cases early on in the 
+pandemic. I decided to look at modeling using only the data 
+following the release of the vaccine, to see if that was a better fit.
+
+```{r Adj. Model}
+
+#Filter for only dates after August 23, 2021
+covid_TX <- covid_TX %>% filter(date > ymd('2021-08-23'))
+
+#Generate model as function of time
+mod_TX <- lm(deaths_per_cases ~ date, covid_TX)
+
+#Check model fit
+summary(mod_TX)
+
+```
+The R-squared looks a lot better for this model, which indicates I was right in
+that the earlier data for COVID-19 acted much less linearly. I then used this 
+model to estimate 2024 data and add it to the TX dataset.
+
+```{r Modeling 2024}
+
+#Initialize dataframe with 2024 dates
+date <- seq(ymd('2023-03-10'), ymd('2024-12-31'), by = 'days')
+dates_TX <- data.frame(date)
+covid_TX_2024 <- full_join(dates_TX, covid_TX, by = "date") %>% arrange(date)
+
+#Add predicted values for deaths_per_cases
+covid_TX_2024 <- covid_TX_2024 %>% mutate(pred_deaths = predict(mod_TX, newdata = data.frame(date)))
+
+```
+
+Once the new model values have been added, I plotted them to see what the 2024
+prediction looked like and how previous predictions compared to the actuals.
+
+```{r TX Model Plot}
+
+#Plotting modeled data
+covid_TX_2024 %>% ggplot(aes(x = date, y = pred_deaths)) + 
+  geom_line(aes(color = "Predicted Deaths/Cases")) + geom_point(aes(
+    color = "Predicted Deaths/Cases")) + 
+  geom_line(aes(y = deaths_per_cases, color = "Actual Deaths/Cases")) + 
+  geom_point(aes(y = deaths_per_cases, color = "Actual Deaths/Cases")) + 
+  theme(legend.position ="bottom", axis.text.x = element_text(angle = 90)) + 
+  labs(title = "COVID-19 Percentage of Deaths/Cases in Texas with 2024 Predictions", 
+       y = NULL)
+
+```
+
+Plainly, deaths per cases reported appear to be decreasing, and it's possible 
+that by the end of 2024 we'll have less than 0.25% deaths per cases reported.
+
+Considering that current flu deaths are estimated to have a mortality of 0.02%,
+we have a ways to go.
+
+## Conclusion and Biases
+
+In conclusion, the COVID-19 data collected from 2020 to 2023 appears to show 
+that quarantine efforts had a significant effect on reported cases (as was the 
+case between US and China, who had very different quarantine policies), but 
+the impact of the COVID vaccine was initially inconclusive without additional 
+data on vaccination of population by state.
+
+That said, a model of the Texas data did show that the percentage of deaths per 
+cases recorded were linearly decreasing since 2021. This is not enough data to
+conclude that the vaccine is responsible, but it does show that we could see 
+behavior closer to the flu (0.02% deaths) if the trend continues.
+
+The main bias I had to tackle was my belief that there would be a significant 
+reduction of deaths following the release of the COVID vaccine. I combated this 
+bias by asking myself - is it clear that the vaccine would cause the decrease? 
+Or could there be other factors at play? Given that there are complicating 
+factors such as vaccination rates in each state, different variants of COVID at 
+different time periods, etc., I could only conclude that the data did not 
+indisputably prove that the vaccine was responsible for any decrease in deaths. 
+
+
+
